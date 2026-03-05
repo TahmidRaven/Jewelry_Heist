@@ -36,10 +36,10 @@
             "_value": false
           },
           "rich-text": {
-            "_value": true
+            "_value": false
           },
           "mask": {
-            "_value": true
+            "_value": false
           },
           "graphics": {
             "_value": true
@@ -48,7 +48,7 @@
             "_value": false
           },
           "affine-transform": {
-            "_value": true
+            "_value": false
           },
           "ui": {
             "_value": true
@@ -98,7 +98,7 @@
             "_value": false
           },
           "intersection-2d": {
-            "_value": true
+            "_value": false
           },
           "primitive": {
             "_value": false
@@ -125,7 +125,7 @@
             "_value": false
           },
           "webview": {
-            "_value": true
+            "_value": false
           },
           "tween": {
             "_value": true
@@ -149,7 +149,7 @@
             "_value": false
           },
           "spine": {
-            "_value": true,
+            "_value": false,
             "_option": "spine-3.8"
           },
           "spine-3.8": {
@@ -190,12 +190,9 @@
             "_value": false
           }
         },
-        "flags": {
-          "LOAD_SPINE_MANUALLY": false
-        },
+        "flags": {},
         "includeModules": [
           "2d",
-          "affine-transform",
           "animation",
           "audio",
           "base",
@@ -203,15 +200,10 @@
           "gfx-webgl",
           "gfx-webgl2",
           "graphics",
-          "intersection-2d",
-          "mask",
           "particle-2d",
           "physics-2d-box2d",
-          "rich-text",
-          "spine-3.8",
           "tween",
-          "ui",
-          "webview"
+          "ui"
         ],
         "noDeprecatedFeatures": {
           "value": false,
