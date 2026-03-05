@@ -51,7 +51,7 @@ export class LightningEffect extends Component {
         // 2. MAIN HALO
         this.drawLayer(start, end, segments, offset, 35 + (pulse * 0.5), 75, baseColor);
 
-        // 3. HOT CORE GLOW
+        // 3. HOT CORE GLOW --> changed to white from base color  [RUBENS BHAI said so]
         this.drawLayer(start, end, segments, offset, 15, 170, whiteColor);
 
         // 4. THE WHITE BOLT (Sharp and steady)
