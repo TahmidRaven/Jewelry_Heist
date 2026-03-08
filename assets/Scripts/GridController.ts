@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, Prefab, instantiate, UITransform, CCInteger, CCFloat, EventTouch, input, Input, v3, Vec3, tween, Color, Animation, isValid, Sprite, ParticleSystem2D, ccenum, Tween } from 'cc';
+import { _decorator, Component, Node, Prefab, instantiate, UITransform, CCInteger, CCFloat, EventTouch, input, Input, v3, Vec3, tween, Color, Animation, isValid, Sprite, ParticleSystem2D, ccenum } from 'cc';
 import { GridPiece } from './GridPiece';
 import { SpecialItemEffects } from './SpecialItemEffects';
 import { GameManager } from './GameManager';
@@ -64,6 +64,9 @@ export class GridController extends Component {
     private _hasInteracted: boolean = false;
     private _firstTNTShown: boolean = false;
     private _firstOrbShown: boolean = false;
+
+    // Track if the specific difficult blockers have been cleared to revert difficulty
+    private _isHelpZoneCleared: boolean = false;
     
     onLoad() {
         input.on(Input.EventType.TOUCH_END, this.onGridTouch, this);
@@ -169,7 +172,7 @@ export class GridController extends Component {
                     brick.setScale(v3(this.gridScale, this.gridScale, 1));
                     brick.setPosition(v3((c * this.actualCellSize) - offsetX, offsetY - (r * this.actualCellSize), 0));
                     
-                    brick.angle = Math.floor(Math.random() * 4) * 90; // random rotation 90 mult
+                    brick.angle = Math.floor(Math.random() * 4) * 90; 
 
                     this.grid[r][c] = brick;
                     let animComp = brick.getComponent(BlockerAnimation) || brick.addComponent(BlockerAnimation);
@@ -317,6 +320,12 @@ export class GridController extends Component {
             if (nr >= 0 && nr < this.rows && nc >= 0 && nc < this.cols) {
                 const neighbor = this.grid[nr][nc];
                 if (neighbor && !neighbor.getComponent(GridPiece)) {
+                    
+                    // Check if this blocker was in the Help Zone (Top 2 rows, cols 3-6)
+                    if (nr <= 1 && nc >= 3 && nc <= 6) {
+                        this.checkIfHelpZoneIsFullyCleared();
+                    }
+
                     const pos = v3(neighbor.position);
                     this.grid[nr][nc] = null;
                     if (GameManager.instance) GameManager.instance.registerBlockerDestroyed();
@@ -327,6 +336,25 @@ export class GridController extends Component {
                 }
             }
         });
+    }
+
+    private checkIfHelpZoneIsFullyCleared() {
+        let bricksLeft = false;
+        // Scan the 2x4 help area
+        for (let r = 0; r <= 1; r++) {
+            for (let c = 3; c <= 6; c++) {
+                const node = this.grid[r][c];
+                if (node && !node.getComponent(GridPiece)) {
+                    bricksLeft = true;
+                    break;
+                }
+            }
+            if (bricksLeft) break;
+        }
+        
+        if (!bricksLeft) {
+            this._isHelpZoneCleared = true;
+        }
     }
 
     private applyGravity() {
@@ -448,36 +476,100 @@ export class GridController extends Component {
         return null;
     }
 
+    /**
+     * LOCALIZED SPAWNING:
+     * Applies dynamic luck (10-50%) ONLY if the ball is adjacent to a blocker.
+     */
     private spawnBallAtTop(c: number, targetRow: number, delay: number, isInitial: boolean) {
         this.scheduleOnce(() => {
-            let prefabIdx = isInitial && this.initialSpawnQueue.length > 0 ? this.initialSpawnQueue.shift()! : Math.floor(Math.random() * this.ballPrefabs.length);
+            let prefabIdx: number;
+
+            // Help zone active and ball is adjacent to a brick
+            const inHelpZone = !this._isHelpZoneCleared && targetRow <= 1 && c >= 3 && c <= 6;
+            const touchingBlocker = inHelpZone && this.isAdjacentToBlocker(targetRow, c);
+
+            if (!isInitial && touchingBlocker) {
+                // Generate a random probability threshold between 10% and 50%
+                const dynamicThreshold = 0.1 + (Math.random() * 0.4);
+                
+                if (Math.random() < dynamicThreshold) {
+                    prefabIdx = this.getWeightedPrefabIndex(targetRow, c);
+                } else {
+                    prefabIdx = Math.floor(Math.random() * this.ballPrefabs.length);
+                }
+            } else {
+                prefabIdx = isInitial && this.initialSpawnQueue.length > 0 
+                    ? this.initialSpawnQueue.shift()! 
+                    : Math.floor(Math.random() * this.ballPrefabs.length);
+            }
+
             if (prefabIdx >= this.ballPrefabs.length) prefabIdx = 0;
+
             const ball = instantiate(this.ballPrefabs[prefabIdx]);
             ball.parent = this.node;
             ball.setScale(v3(this.gridScale, this.gridScale, 1));
+            
             const piece = ball.getComponent(GridPiece) || ball.addComponent(GridPiece);
-            piece.row = targetRow; piece.col = c; piece.prefabName = this.ballPrefabs[prefabIdx].name;
-            const totalW = (this.cols - 1) * this.actualCellSize, totalH = (this.rows - 1) * this.actualCellSize;
+            piece.row = targetRow; 
+            piece.col = c; 
+            piece.prefabName = this.ballPrefabs[prefabIdx].name;
+
+            // Access Prefab component through .data
+            const prefabRoot = this.ballPrefabs[prefabIdx].data;
+            const prefabPiece = prefabRoot ? prefabRoot.getComponent(GridPiece) : null;
+            if (prefabPiece) piece.colorId = prefabPiece.colorId;
+
+            const totalW = (this.cols - 1) * this.actualCellSize;
+            const totalH = (this.rows - 1) * this.actualCellSize;
             const startX = (c * this.actualCellSize) - (totalW / 2);
-            const startY = (totalH / 2) + 150, targetY = (totalH / 2) - (targetRow * this.actualCellSize);
+            const startY = (totalH / 2) + 150;
+            const targetY = (totalH / 2) - (targetRow * this.actualCellSize);
+
             ball.setPosition(v3(startX, startY, 0));
             this.grid[targetRow][c] = ball;
+
             tween(ball).to(0.4, { position: v3(startX, targetY, 0) }, { easing: 'bounceOut' }).start();
         }, delay);
+    }
+
+    /**
+     * Checks if the target cell has a neighbor that is a blocker (brick).
+     */
+    private isAdjacentToBlocker(r: number, c: number): boolean {
+        const directions = [{ dr: 1, dc: 0 }, { dr: -1, dc: 0 }, { dr: 0, dc: 1 }, { dr: 0, dc: -1 }];
+        for (const dir of directions) {
+            const nr = r + dir.dr, nc = c + dir.dc;
+            if (nr >= 0 && nr < this.rows && nc >= 0 && nc < this.cols) {
+                const node = this.grid[nr][nc];
+                if (node && !node.getComponent(GridPiece)) return true;
+            }
+        }
+        return false;
+    }
+
+    private getWeightedPrefabIndex(r: number, c: number): number {
+        const neighborNames: string[] = [];
+        if (c > 0 && this.grid[r][c - 1]) {
+            const p = this.grid[r][c - 1]!.getComponent(GridPiece);
+            if (p) neighborNames.push(p.prefabName);
+        }
+        if (r < this.rows - 1 && this.grid[r + 1][c]) {
+            const p = this.grid[r + 1][c]!.getComponent(GridPiece);
+            if (p) neighborNames.push(p.prefabName);
+        }
+        if (neighborNames.length > 0) {
+            const chosenName = neighborNames[Math.floor(Math.random() * neighborNames.length)];
+            const idx = this.ballPrefabs.findIndex(p => p.name === chosenName);
+            return idx !== -1 ? idx : Math.floor(Math.random() * this.ballPrefabs.length);
+        }
+        return Math.floor(Math.random() * this.ballPrefabs.length);
     }
 
     private startItemBreathe(node: Node) {
         const baseScale = this.gridScale;
         const shrinkScale = v3(baseScale * 0.85, baseScale * 0.85, 1);
         const normalScale = v3(baseScale, baseScale, 1);
-
-        tween(node)
-            .to(1.5, { scale: shrinkScale }, { easing: 'sineInOut' })
-            .to(1.5, { scale: normalScale }, { easing: 'sineInOut' })
-            .delay(Math.random() * 0.5) 
-            .union()
-            .repeatForever()
-            .start();
+        tween(node).to(1.5, { scale: shrinkScale }, { easing: 'sineInOut' }).to(1.5, { scale: normalScale }, { easing: 'sineInOut' }).delay(Math.random() * 0.5).union().repeatForever().start();
     }
 
     private spawnTNTItem(r: number, c: number) {
@@ -488,65 +580,25 @@ export class GridController extends Component {
     private spawnOrbItem(r: number, c: number, colorId: string = "") {
         const orbPrefab = this.orbPrefabs.find(p => p.name.toLowerCase().includes(colorId.toLowerCase()));
         if (!orbPrefab) { this.applyGravity(); return; }
-        
-        const item = instantiate(orbPrefab);
-        item.parent = this.node;
-        item.setSiblingIndex(this.node.children.length);
-
+        const item = instantiate(orbPrefab); item.parent = this.node;
         const piece = item.getComponent(GridPiece) || item.addComponent(GridPiece);
         piece.row = r; piece.col = c; piece.prefabName = "ORB"; piece.colorId = colorId;
-        
-        const offsetX = (this.cols - 1) * this.actualCellSize / 2;
-        const offsetY = (this.rows - 1) * this.actualCellSize / 2;
+        const offsetX = (this.cols - 1) * this.actualCellSize / 2, offsetY = (this.rows - 1) * this.actualCellSize / 2;
         item.setPosition(v3((c * this.actualCellSize) - offsetX, offsetY - (r * this.actualCellSize), 0));
-        item.setScale(v3(0, 0, 0));
-        this.grid[r][c] = item;
-
-        const flashNode = item.getChildByName("ReverseFlash");
-        if (flashNode) {
-            const flashAnim = flashNode.getComponent(Animation);
-            if (flashAnim) flashAnim.play("reverseAnim");
-        }
-
-        tween(item)
-            .to(0.2, { scale: v3(this.gridScale, this.gridScale, 1) }, { easing: 'backOut' })
-            .call(() => { 
-                this.startItemBreathe(item); 
-                this.applyGravity(); 
-            })
-            .start();
+        item.setScale(v3(0, 0, 0)); this.grid[r][c] = item;
+        tween(item).to(0.2, { scale: v3(this.gridScale, this.gridScale, 1) }, { easing: 'backOut' }).call(() => { this.startItemBreathe(item); this.applyGravity(); }).start();
     }
 
     private createSpecialItem(prefab: Prefab, r: number, c: number, name: string, colorId: string = "") {
-        const item = instantiate(prefab);
-        item.parent = this.node;
-        item.setSiblingIndex(this.node.children.length); 
-
+        const item = instantiate(prefab); item.parent = this.node;
         const piece = item.getComponent(GridPiece) || item.addComponent(GridPiece);
         piece.row = r; piece.col = c; piece.prefabName = name; piece.colorId = colorId;
-        
-        const offsetX = (this.cols - 1) * this.actualCellSize / 2;
-        const offsetY = (this.rows - 1) * this.actualCellSize / 2;
-        const targetPos = v3((c * this.actualCellSize) - offsetX, offsetY - (r * this.actualCellSize), 0);
-        
-        item.setPosition(targetPos);
-        item.setScale(v3(0, 0, 0));
-        this.grid[r][c] = item;
-
-        const flashNode = item.getChildByName("ReverseFlash");
-        if (flashNode) {
-            const flashAnim = flashNode.getComponent(Animation);
-            if (flashAnim) flashAnim.play("reverseAnim");
-        }
-
-        tween(item)
-            .to(0.2, { scale: v3(this.gridScale, this.gridScale, 1) }, { easing: 'backOut' })
-            .call(() => {
-                item.angle = 0;
-                tween(item).to(0.6, { angle: -360 }, { easing: 'quadOut' }).start();
-                this.startItemBreathe(item); 
-                this.applyGravity();
-            })
-            .start();
+        const offsetX = (this.cols - 1) * this.actualCellSize / 2, offsetY = (this.rows - 1) * this.actualCellSize / 2;
+        item.setPosition(v3((c * this.actualCellSize) - offsetX, offsetY - (r * this.actualCellSize), 0));
+        item.setScale(v3(0, 0, 0)); this.grid[r][c] = item;
+        tween(item).to(0.2, { scale: v3(this.gridScale, this.gridScale, 1) }, { easing: 'backOut' }).call(() => {
+            item.angle = 0; tween(item).to(0.6, { angle: -360 }, { easing: 'quadOut' }).start();
+            this.startItemBreathe(item); this.applyGravity();
+        }).start();
     }
 }
